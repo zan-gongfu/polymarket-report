@@ -58,10 +58,11 @@ def get_latest_settled():
         f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=50",
         timeout=15
     ).json()
+    today = datetime.now().strftime("%Y-%m-%d")
     best = None
     for p in raw:
         end = p.get("endDate", "")
-        if not end:
+        if not end or end > today:
             continue
         if best is None or end > best["end_date"]:
             val = float(p.get("currentValue") or 0)
