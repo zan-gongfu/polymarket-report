@@ -241,15 +241,58 @@ def run(force=False):
         return
 
     # 检测减少的持仓 → 查结算结果
-    settled = []
+    latest_settled = old.get("last_settled") if old else None
     if old_sizes:
         removed = set(old_sizes.keys()) - {d["aid"] for d in items}
         if removed:
             raw_settled = get_settled(removed)
             all_settled = sorted(raw_settled.values(), key=lambda x: x["end_date"], reverse=True)
             if all_settled:
-                settled = [all_settled[0]]
-                print(f"📉 {len(all_settled)} 场已结算 | 最近: {settled[0]['result']} {settled[0]['title']}")
+                latest_settled = all_settled[0]
+                print(f"📉 {len(all_settled)} 场已结算 | 最近: {latest_settled['result']} {latest_settled['title']}")
+
+    # 首次运行：查历史结算记录
+    if not latest_settled:
+        try:
+            raw = requests.get(
+                f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=200", timeout=15
+            ).json()
+            best = None
+            today = datetime.now().strftime("%Y-%m-%d")
+            for p in raw:
+                end = p.get("endDate", "")
+                if not end or end > today:
+                    continue
+                val = float(p.get("currentValue") or 0)
+                if val != 0 and not p.get("redeemable"):
+                    continue
+                if best is None or end > best["end_date"]:
+                    avg = float(p.get("avgPrice") or 0)
+                    eid = p.get("eventId", "")
+                    best = {
+                        "title": (p.get("title") or "未知").strip(),
+                        "outcome": p.get("outcome") or "",
+                        "result": "❌ 输",
+                        "size": float(p.get("size") or 0),
+                        "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
+                        "cost": float(p.get("initialValue") or 0),
+                        "profit": val - float(p.get("initialValue") or 0),
+                        "end_date": end,
+                        "event_id": eid,
+                    }
+            if best and best.get("event_id"):
+                try:
+                    st = requests.get(f"https://gamma-api.polymarket.com/events/{best['event_id']}", timeout=10).json().get("startTime")
+                    if st:
+                        utc = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                        best["end_date"] = utc.astimezone(CST).strftime("%m/%d %H:%M")
+                except Exception:
+                    pass
+            if best:
+                latest_settled = best
+                print(f"📋 历史最近结算: {best['result']} {best['title']}")
+        except Exception:
+            pass
 
     reason = "首次运行" if old is None else "持仓变化" if old.get("fingerprint") != fp else "手动触发"
     print(f"📊 {len(items)} 个活跃 | {reason}")
@@ -259,8 +302,10 @@ def run(force=False):
     state = {"fingerprint": fp, "sizes": sizes, "updated_at": datetime.now().isoformat()}
     if old:
         state = {**old, **state}
+    if latest_settled:
+        state["last_settled"] = latest_settled
 
-    send(card(items, old_sizes, settled))
+    send(card(items, old_sizes, [latest_settled] if latest_settled else []))
     state = update_kdocs(items, state)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
