@@ -76,7 +76,17 @@ def get_latest_settled():
                 "cost": cost,
                 "profit": val - cost,
                 "end_date": end,
+                "event_id": p.get("eventId", ""),
             }
+    # 获取开赛具体时间
+    if best and best.get("event_id"):
+        try:
+            st = requests.get(f"https://gamma-api.polymarket.com/events/{best['event_id']}", timeout=10).json().get("startTime")
+            if st:
+                utc = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                best["end_date"] = utc.astimezone(CST).strftime("%m/%d %H:%M")
+        except Exception:
+            pass
     return best
 
 
@@ -140,7 +150,7 @@ def card(items, old_sizes, settled=None):
     if settled:
         lines += ["", f"📊 最近结算"]
         for s in settled:
-            lines += [f"  {s['result']} {s['title']} → {s['outcome']}  🕐{s['end_date'][5:].replace('-', '/') if s.get('end_date') else ''}",
+            lines += [f"  {s['result']} {s['title']} → {s['outcome']}  🕐{s.get('end_date', '')}",
                       f"  份额：{s['size']:.1f}　买入价：{s['price']}",
                       f"  成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
     return {"msg_type": "interactive", "card": {
