@@ -21,6 +21,32 @@ def get_active():
     return [p for p in raw if float(p.get("currentValue") or 0) > 0]
 
 
+def get_settled(asset_ids):
+    """查询已结算比赛结果 → dict[aid]={"title","outcome","result","profit"}"""
+    if not asset_ids:
+        return {}
+    raw = requests.get(
+        f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=500",
+        timeout=15
+    ).json()
+    results = {}
+    for p in raw:
+        aid = p.get("asset")
+        if aid in asset_ids:
+            val = float(p.get("currentValue") or 0)
+            cost = float(p.get("initialValue") or 0)
+            results[aid] = {
+                "title": (p.get("title") or "未知").strip(),
+                "outcome": p.get("outcome") or "",
+                "result": "✅ 赢" if val > 0 else "❌ 输",
+                "profit": val - cost,
+            }
+    for aid in asset_ids:
+        if aid not in results:
+            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "profit": 0}
+    return results
+
+
 def fetch_event_times(positions):
     """并行查询开赛时间 → dict[eventId]="MM/DD HH:MM" 北京时间"""
     eids = {p["eventId"] for p in positions if p.get("eventId")}
@@ -60,10 +86,11 @@ def parse_positions(raw, event_times):
         })
         sizes[aid] = sz
         fp_parts.append(f"{aid}|{sz}")
+    items.sort(key=lambda x: x["end"] if x["end"] != "待定" else "99/99 99:99")
     return items, json.dumps(sorted(fp_parts)), sizes
 
 
-def card(items, old_sizes):
+def card(items, old_sizes, settled=None):
     """飞书卡片消息体"""
     lines = [f"📍 地址： `{SHORT_WALLET}`", f"📋 活跃持仓（{len(items)} 个）"]
     for i, d in enumerate(items):
@@ -77,6 +104,10 @@ def card(items, old_sizes):
                   f"方向：{d['outcome']}　份额：{seg}",
                   f"买入价：{d['price']}",
                   f"成本：${d['cost']:.2f}　赢利：${d['profit']:+.2f}"]
+    if settled:
+        lines += ["", f"📊 已结算（{len(settled)} 场）"]
+        for s in settled:
+            lines += [f"  {s['result']} {s['title']} → {s['outcome']}"]
     return {"msg_type": "interactive", "card": {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": f"💰 Polymarket 持仓                    {datetime.now().strftime('%H:%M')}"}, "template": "green"},
@@ -177,10 +208,20 @@ def run(force=False):
 
     event_times = fetch_event_times(raw) if raw else {}
     items, fp, sizes = parse_positions(raw, event_times)
+    old_sizes = old.get("sizes") if old else {}
 
     if not force and old and old.get("fingerprint") == fp:
         print("📊 无变化，跳过")
         return
+
+    # 检测减少的持仓 → 查结算结果
+    settled = []
+    if old_sizes:
+        removed = set(old_sizes.keys()) - {d["aid"] for d in items}
+        if removed:
+            raw_settled = get_settled(removed)
+            settled = [raw_settled[aid] for aid in sorted(raw_settled)]
+            print(f"📉 {len(settled)} 场已结算")
 
     reason = "首次运行" if old is None else "持仓变化" if old.get("fingerprint") != fp else "手动触发"
     print(f"📊 {len(items)} 个活跃 | {reason}")
@@ -191,7 +232,7 @@ def run(force=False):
     if old:
         state = {**old, **state}
 
-    send(card(items, old.get("sizes") if old else {}))
+    send(card(items, old_sizes, settled))
     state = update_kdocs(items, state)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
