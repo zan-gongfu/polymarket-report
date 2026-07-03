@@ -35,17 +35,20 @@ def get_settled(asset_ids):
         if aid in asset_ids:
             val = float(p.get("currentValue") or 0)
             cost = float(p.get("initialValue") or 0)
+            avg = float(p.get("avgPrice") or 0)
             results[aid] = {
                 "title": (p.get("title") or "未知").strip(),
                 "outcome": p.get("outcome") or "",
                 "result": "✅ 赢" if val > 0 else "❌ 输",
+                "size": float(p.get("size") or 0),
+                "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
                 "cost": cost,
                 "profit": val - cost,
                 "end_date": p.get("endDate", ""),
             }
     for aid in asset_ids:
         if aid not in results:
-            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "cost": 0, "profit": 0, "end_date": ""}
+            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "size": 0, "price": "N/A", "cost": 0, "profit": 0, "end_date": ""}
     return results
 
 
@@ -110,7 +113,7 @@ def card(items, old_sizes, settled=None):
         lines += ["", f"📊 最近结算"]
         for s in settled:
             lines += [f"  {s['result']} {s['title']} → {s['outcome']}",
-                      f"  成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
+                      f"  份额：{s['size']:.1f}　买入价：{s['price']}　成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
     return {"msg_type": "interactive", "card": {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": f"💰 Polymarket 持仓                    {datetime.now().strftime('%H:%M')}"}, "template": "green"},
