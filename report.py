@@ -113,8 +113,8 @@ def card(items, old_sizes, settled=None):
         lines += ["", f"📊 最近结算"]
         for s in settled:
             lines += [f"  {s['result']} {s['title']} → {s['outcome']}",
-                      f"  份额：{s['size']:.1f}",
-                      f"  买入价：{s['price']}　成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
+                      f"  份额：{s['size']:.1f}　买入价：{s['price']}",
+                      f"  成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
     return {"msg_type": "interactive", "card": {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": f"💰 Polymarket 持仓                    {datetime.now().strftime('%H:%M')}"}, "template": "green"},
