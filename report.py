@@ -64,14 +64,17 @@ def get_latest_settled():
         end = p.get("endDate", "")
         if not end or end > today:
             continue
+        # 只取真正结算的（currentValue=0 或 redeemable=true）
+        val = float(p.get("currentValue") or 0)
+        if val != 0 and not p.get("redeemable"):
+            continue
         if best is None or end > best["end_date"]:
-            val = float(p.get("currentValue") or 0)
             cost = float(p.get("initialValue") or 0)
             avg = float(p.get("avgPrice") or 0)
             best = {
                 "title": (p.get("title") or "未知").strip(),
                 "outcome": p.get("outcome") or "",
-                "result": "✅ 赢" if val > 0 else "❌ 输",
+                "result": "✅ 赢" if p.get("redeemable") and val > 0 else "❌ 输",
                 "size": float(p.get("size") or 0),
                 "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
                 "cost": cost,
