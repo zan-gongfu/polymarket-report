@@ -22,7 +22,7 @@ def get_active():
 
 
 def get_settled(asset_ids):
-    """查询已结算比赛结果 → dict[aid]={"title","outcome","result","profit"}"""
+    """查询已结算比赛结果 → dict[aid]={"title","outcome","result","size","price","cost","profit","end_date"}"""
     if not asset_ids:
         return {}
     raw = requests.get(
@@ -36,62 +36,39 @@ def get_settled(asset_ids):
             val = float(p.get("currentValue") or 0)
             cost = float(p.get("initialValue") or 0)
             avg = float(p.get("avgPrice") or 0)
+            eid = p.get("eventId", "")
             results[aid] = {
                 "title": (p.get("title") or "未知").strip(),
                 "outcome": p.get("outcome") or "",
-                "result": "✅ 赢" if val > 0 else "❌ 输",
+                "result": "❌ 输",
                 "size": float(p.get("size") or 0),
                 "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
                 "cost": cost,
                 "profit": val - cost,
                 "end_date": p.get("endDate", ""),
+                "event_id": eid,
             }
+    # 查询开赛具体时间
+    eids = {r["event_id"] for r in results.values() if r["event_id"]}
+    if eids:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(eids), 8)) as ex:
+            futs = {ex.submit(requests.get, f"https://gamma-api.polymarket.com/events/{eid}", timeout=10): eid for eid in eids}
+            for f in concurrent.futures.as_completed(futs):
+                try:
+                    st = f.result().json().get("startTime")
+                    if st:
+                        utc = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                        fmt = utc.astimezone(CST).strftime("%m/%d %H:%M")
+                        for r in results.values():
+                            if r["event_id"] == futs[f]:
+                                r["end_date"] = fmt
+                except Exception:
+                    pass
     for aid in asset_ids:
         if aid not in results:
-            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "size": 0, "price": "N/A", "cost": 0, "profit": 0, "end_date": ""}
+            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "size": 0, "price": "N/A", "cost": 0, "profit": 0, "end_date": "", "event_id": ""}
     return results
-
-
-def get_latest_settled():
-    """获取最近一场已结算比赛 → dict 或 None"""
-    raw = requests.get(
-        f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=50",
-        timeout=15
-    ).json()
-    today = datetime.now().strftime("%Y-%m-%d")
-    best = None
-    for p in raw:
-        end = p.get("endDate", "")
-        if not end or end > today:
-            continue
-        # 只取真正结算的（currentValue=0 或 redeemable=true）
-        val = float(p.get("currentValue") or 0)
-        if val != 0 and not p.get("redeemable"):
-            continue
-        if best is None or end > best["end_date"]:
-            cost = float(p.get("initialValue") or 0)
-            avg = float(p.get("avgPrice") or 0)
-            best = {
-                "title": (p.get("title") or "未知").strip(),
-                "outcome": p.get("outcome") or "",
-                "result": "✅ 赢" if p.get("redeemable") and val > 0 else "❌ 输",
-                "size": float(p.get("size") or 0),
-                "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
-                "cost": cost,
-                "profit": val - cost,
-                "end_date": end,
-                "event_id": p.get("eventId", ""),
-            }
-    # 获取开赛具体时间
-    if best and best.get("event_id"):
-        try:
-            st = requests.get(f"https://gamma-api.polymarket.com/events/{best['event_id']}", timeout=10).json().get("startTime")
-            if st:
-                utc = datetime.fromisoformat(st.replace("Z", "+00:00"))
-                best["end_date"] = utc.astimezone(CST).strftime("%m/%d %H:%M")
-        except Exception:
-            pass
-    return best
 
 
 def fetch_event_times(positions):
@@ -271,16 +248,8 @@ def run(force=False):
             raw_settled = get_settled(removed)
             all_settled = sorted(raw_settled.values(), key=lambda x: x["end_date"], reverse=True)
             if all_settled:
-                print(f"📉 {len(all_settled)} 场已结算")
                 settled = [all_settled[0]]
-
-    # 每次发信息都带上最近一场结算
-    latest = get_latest_settled()
-    if latest:
-        # 如果已从移除检测中拿到了同一场，不重复
-        if not settled or settled[0]["end_date"] != latest["end_date"] or settled[0]["title"] != latest["title"]:
-            settled = [latest]
-        print(f"📋 最近结算: {latest['result']} {latest['title']}")
+                print(f"📉 {len(all_settled)} 场已结算 | 最近: {settled[0]['result']} {settled[0]['title']}")
 
     reason = "首次运行" if old is None else "持仓变化" if old.get("fingerprint") != fp else "手动触发"
     print(f"📊 {len(items)} 个活跃 | {reason}")
