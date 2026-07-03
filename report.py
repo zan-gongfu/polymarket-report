@@ -251,14 +251,14 @@ def run(force=False):
                 latest_settled = all_settled[0]
                 print(f"📉 {len(all_settled)} 场已结算 | 最近: {latest_settled['result']} {latest_settled['title']}")
 
-    # 首次运行：查历史结算记录
+    # 首次运行：查历史结算记录（按 gamma startTime 排序，不是 endDate）
     if not latest_settled:
         try:
             raw = requests.get(
                 f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=200", timeout=15
             ).json()
-            best = None
             today = datetime.now().strftime("%Y-%m-%d")
+            candidates = []
             for p in raw:
                 end = p.get("endDate", "")
                 if not end or end > today:
@@ -266,31 +266,37 @@ def run(force=False):
                 val = float(p.get("currentValue") or 0)
                 if val != 0 and not p.get("redeemable"):
                     continue
-                if best is None or end > best["end_date"]:
-                    avg = float(p.get("avgPrice") or 0)
-                    eid = p.get("eventId", "")
-                    best = {
-                        "title": (p.get("title") or "未知").strip(),
-                        "outcome": p.get("outcome") or "",
-                        "result": "❌ 输",
-                        "size": float(p.get("size") or 0),
-                        "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
-                        "cost": float(p.get("initialValue") or 0),
-                        "profit": val - float(p.get("initialValue") or 0),
-                        "end_date": end,
-                        "event_id": eid,
-                    }
-            if best and best.get("event_id"):
-                try:
-                    st = requests.get(f"https://gamma-api.polymarket.com/events/{best['event_id']}", timeout=10).json().get("startTime")
-                    if st:
-                        utc = datetime.fromisoformat(st.replace("Z", "+00:00"))
-                        best["end_date"] = utc.astimezone(CST).strftime("%m/%d %H:%M")
-                except Exception:
-                    pass
+                avg = float(p.get("avgPrice") or 0)
+                candidates.append({
+                    "title": (p.get("title") or "未知").strip(),
+                    "outcome": p.get("outcome") or "",
+                    "result": "❌ 输",
+                    "size": float(p.get("size") or 0),
+                    "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
+                    "cost": float(p.get("initialValue") or 0),
+                    "profit": val - float(p.get("initialValue") or 0),
+                    "end_date": end,
+                    "event_id": p.get("eventId", ""),
+                })
+            # 取 endDate 最近的 10 个，并行查 gamma 开赛时间
+            candidates.sort(key=lambda x: x["end_date"], reverse=True)
+            for c in candidates[:10]:
+                eid = c.get("event_id")
+                if eid:
+                    try:
+                        st = requests.get(f"https://gamma-api.polymarket.com/events/{eid}", timeout=10).json().get("startTime")
+                        if st:
+                            c["_start"] = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+            candidates.sort(key=lambda x: x.get("_start") or datetime(1, 1, 1, tzinfo=timezone.utc), reverse=True)
+            best = candidates[0] if candidates else None
             if best:
+                if best.get("_start"):
+                    best["end_date"] = best["_start"].astimezone(CST).strftime("%m/%d %H:%M")
+                    del best["_start"]
                 latest_settled = best
-                print(f"📋 历史最近结算: {best['result']} {best['title']}")
+                print(f"📋 历史最近结算: {best['result']} {best['title']}  🕐{best['end_date']}")
         except Exception:
             pass
 
