@@ -140,7 +140,7 @@ def card(items, old_sizes, settled=None):
     if settled:
         lines += ["", f"📊 最近结算"]
         for s in settled:
-            lines += [f"  {s['result']} {s['title']} → {s['outcome']}",
+            lines += [f"  {s['result']} {s['title']} → {s['outcome']}  🕐{s['end_date'][5:].replace('-', '/') if s.get('end_date') else ''}",
                       f"  份额：{s['size']:.1f}　买入价：{s['price']}",
                       f"  成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
     return {"msg_type": "interactive", "card": {
