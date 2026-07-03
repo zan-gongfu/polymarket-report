@@ -52,6 +52,34 @@ def get_settled(asset_ids):
     return results
 
 
+def get_latest_settled():
+    """获取最近一场已结算比赛 → dict 或 None"""
+    raw = requests.get(
+        f"https://data-api.polymarket.com/positions?user={WALLET}&closed=true&limit=50",
+        timeout=15
+    ).json()
+    best = None
+    for p in raw:
+        end = p.get("endDate", "")
+        if not end:
+            continue
+        if best is None or end > best["end_date"]:
+            val = float(p.get("currentValue") or 0)
+            cost = float(p.get("initialValue") or 0)
+            avg = float(p.get("avgPrice") or 0)
+            best = {
+                "title": (p.get("title") or "未知").strip(),
+                "outcome": p.get("outcome") or "",
+                "result": "✅ 赢" if val > 0 else "❌ 输",
+                "size": float(p.get("size") or 0),
+                "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
+                "cost": cost,
+                "profit": val - cost,
+                "end_date": end,
+            }
+    return best
+
+
 def fetch_event_times(positions):
     """并行查询开赛时间 → dict[eventId]="MM/DD HH:MM" 北京时间"""
     eids = {p["eventId"] for p in positions if p.get("eventId")}
@@ -221,15 +249,24 @@ def run(force=False):
         print("📊 无变化，跳过")
         return
 
-    # 检测减少的持仓 → 查结算结果（只显示最近一场）
+    # 检测减少的持仓 → 查结算结果
     settled = []
     if old_sizes:
         removed = set(old_sizes.keys()) - {d["aid"] for d in items}
         if removed:
             raw_settled = get_settled(removed)
             all_settled = sorted(raw_settled.values(), key=lambda x: x["end_date"], reverse=True)
-            settled = [all_settled[0]] if all_settled else []
-            print(f"📉 {len(all_settled)} 场已结算，显示最近 1 场")
+            if all_settled:
+                print(f"📉 {len(all_settled)} 场已结算")
+                settled = [all_settled[0]]
+
+    # 每次发信息都带上最近一场结算
+    latest = get_latest_settled()
+    if latest:
+        # 如果已从移除检测中拿到了同一场，不重复
+        if not settled or settled[0]["end_date"] != latest["end_date"] or settled[0]["title"] != latest["title"]:
+            settled = [latest]
+        print(f"📋 最近结算: {latest['result']} {latest['title']}")
 
     reason = "首次运行" if old is None else "持仓变化" if old.get("fingerprint") != fp else "手动触发"
     print(f"📊 {len(items)} 个活跃 | {reason}")
