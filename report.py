@@ -39,11 +39,13 @@ def get_settled(asset_ids):
                 "title": (p.get("title") or "未知").strip(),
                 "outcome": p.get("outcome") or "",
                 "result": "✅ 赢" if val > 0 else "❌ 输",
+                "cost": cost,
                 "profit": val - cost,
+                "end_date": p.get("endDate", ""),
             }
     for aid in asset_ids:
         if aid not in results:
-            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "profit": 0}
+            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "cost": 0, "profit": 0, "end_date": ""}
     return results
 
 
@@ -105,9 +107,10 @@ def card(items, old_sizes, settled=None):
                   f"买入价：{d['price']}",
                   f"成本：${d['cost']:.2f}　赢利：${d['profit']:+.2f}"]
     if settled:
-        lines += ["", f"📊 已结算（{len(settled)} 场）"]
+        lines += ["", f"📊 最近结算"]
         for s in settled:
-            lines += [f"  {s['result']} {s['title']} → {s['outcome']}"]
+            lines += [f"  {s['result']} {s['title']} → {s['outcome']}",
+                      f"  成本：${s['cost']:.2f}　赢利：${s['profit']:+.2f}"]
     return {"msg_type": "interactive", "card": {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": f"💰 Polymarket 持仓                    {datetime.now().strftime('%H:%M')}"}, "template": "green"},
@@ -214,14 +217,15 @@ def run(force=False):
         print("📊 无变化，跳过")
         return
 
-    # 检测减少的持仓 → 查结算结果
+    # 检测减少的持仓 → 查结算结果（只显示最近一场）
     settled = []
     if old_sizes:
         removed = set(old_sizes.keys()) - {d["aid"] for d in items}
         if removed:
             raw_settled = get_settled(removed)
-            settled = [raw_settled[aid] for aid in sorted(raw_settled)]
-            print(f"📉 {len(settled)} 场已结算")
+            all_settled = sorted(raw_settled.values(), key=lambda x: x["end_date"], reverse=True)
+            settled = [all_settled[0]] if all_settled else []
+            print(f"📉 {len(all_settled)} 场已结算，显示最近 1 场")
 
     reason = "首次运行" if old is None else "持仓变化" if old.get("fingerprint") != fp else "手动触发"
     print(f"📊 {len(items)} 个活跃 | {reason}")
