@@ -65,9 +65,6 @@ def get_settled(asset_ids):
                                 r["end_date"] = fmt
                 except Exception:
                     pass
-    for aid in asset_ids:
-        if aid not in results:
-            results[aid] = {"title": "未知", "outcome": "", "result": "❓ 未知", "size": 0, "price": "N/A", "cost": 0, "profit": 0, "end_date": "", "event_id": ""}
     return results
 
 
@@ -242,6 +239,9 @@ def run(force=False):
 
     # 检测减少的持仓 → 查结算结果
     latest_settled = old.get("last_settled") if old else None
+    # 保护：state 中的脏数据（"未知"）视为无
+    if latest_settled and latest_settled.get("title") == "未知":
+        latest_settled = None
     if old_sizes:
         removed = set(old_sizes.keys()) - {d["aid"] for d in items}
         if removed:
