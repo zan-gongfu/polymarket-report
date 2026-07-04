@@ -21,8 +21,8 @@ def get_active():
     return [p for p in raw if float(p.get("currentValue") or 0) > 0]
 
 
-def get_settled(asset_ids):
-    """查询已结算比赛结果 → dict[aid]={"title","outcome","result","size","price","cost","profit","end_date"}"""
+def get_settled(asset_ids, old_positions_data=None):
+    """查询已结算比赛结果 → dict[aid]={...}"""
     if not asset_ids:
         return {}
     raw = requests.get(
@@ -40,7 +40,7 @@ def get_settled(asset_ids):
             results[aid] = {
                 "title": (p.get("title") or "未知").strip(),
                 "outcome": p.get("outcome") or "",
-                "result": "❌ 输",
+                "result": "✅ 赢" if val > 0 else "❌ 输",
                 "size": float(p.get("size") or 0),
                 "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
                 "cost": cost,
@@ -65,6 +65,22 @@ def get_settled(asset_ids):
                                 r["end_date"] = fmt
                 except Exception:
                     pass
+    # closed API 查不到 → 已兑换的赢单，从旧快照重建
+    if old_positions_data:
+        for aid in asset_ids:
+            if aid not in results and aid in old_positions_data:
+                d = old_positions_data[aid]
+                results[aid] = {
+                    "title": d["title"],
+                    "outcome": d["outcome"],
+                    "result": "✅ 赢",
+                    "size": d["size"],
+                    "price": d["price"],
+                    "cost": d["cost"],
+                    "profit": d["profit"],
+                    "end_date": d.get("end", ""),
+                    "event_id": "",
+                }
     return results
 
 
@@ -89,13 +105,13 @@ def fetch_event_times(positions):
 
 
 def parse_positions(raw, event_times):
-    """一次遍历 raw，同时产出展示字段 / 指纹 / 份额字典（替代独立的 snapshot）"""
-    items, sizes, fp_parts = [], {}, []
+    """一次遍历 raw，同时产出展示字段 / 指纹 / 份额字典 / 持仓快照"""
+    items, sizes, fp_parts, positions_data = [], {}, [], {}
     for p in raw:
         sz = float(p.get("size") or 0)
         avg = float(p.get("avgPrice") or 0)
         aid = p["asset"]
-        items.append({
+        entry = {
             "aid": aid,
             "title": (p.get("title") or "未知").strip(),
             "outcome": p.get("outcome") or "",
@@ -104,11 +120,13 @@ def parse_positions(raw, event_times):
             "cost": float(p.get("initialValue") or 0),
             "profit": sz * (1 - avg),
             "end": event_times.get(p.get("eventId"), "待定"),
-        })
+        }
+        items.append(entry)
         sizes[aid] = sz
+        positions_data[aid] = {k: entry[k] for k in ("title", "outcome", "size", "price", "cost", "profit", "end")}
         fp_parts.append(f"{aid}|{sz}")
     items.sort(key=lambda x: x["end"] if x["end"] != "待定" else "99/99 99:99")
-    return items, json.dumps(sorted(fp_parts)), sizes
+    return items, json.dumps(sorted(fp_parts)), sizes, positions_data
 
 
 def card(items, old_sizes, settled=None):
@@ -230,7 +248,7 @@ def run(force=False):
         old = None
 
     event_times = fetch_event_times(raw) if raw else {}
-    items, fp, sizes = parse_positions(raw, event_times)
+    items, fp, sizes, positions_data = parse_positions(raw, event_times)
     old_sizes = old.get("sizes") if old else {}
 
     if not force and old and old.get("fingerprint") == fp:
@@ -245,7 +263,7 @@ def run(force=False):
     if old_sizes:
         removed = set(old_sizes.keys()) - {d["aid"] for d in items}
         if removed:
-            raw_settled = get_settled(removed)
+            raw_settled = get_settled(removed, old.get("positions_data"))
             all_settled = sorted(raw_settled.values(), key=lambda x: x["end_date"], reverse=True)
             if all_settled:
                 latest_settled = all_settled[0]
@@ -270,7 +288,7 @@ def run(force=False):
                 candidates.append({
                     "title": (p.get("title") or "未知").strip(),
                     "outcome": p.get("outcome") or "",
-                    "result": "❌ 输",
+                    "result": "✅ 赢" if val > 0 else "❌ 输",
                     "size": float(p.get("size") or 0),
                     "price": f"{avg*100:.1f}¢ ({1/avg:.2f}x)" if avg else "N/A",
                     "cost": float(p.get("initialValue") or 0),
@@ -305,7 +323,7 @@ def run(force=False):
     if event_times:
         print(f"⏰ 已获取 {len(event_times)} 个赛事开赛时间")
 
-    state = {"fingerprint": fp, "sizes": sizes, "updated_at": datetime.now().isoformat()}
+    state = {"fingerprint": fp, "sizes": sizes, "positions_data": positions_data, "updated_at": datetime.now().isoformat()}
     if old:
         state = {**old, **state}
     if latest_settled:
